@@ -1,0 +1,44 @@
+# Nightly encrypted logical backup of the production database, in addition
+# to Neon's own point-in-time restore. The dump is encrypted with `age` to a
+# public key; only the holder of the matching private key (kept offline by
+# the site administrator) can decrypt it. Artifacts expire after 30 days,
+# which is the deletion window promised in the Privacy Policy.
+#
+# Required repository secrets:
+#   BACKUP_DATABASE_URL   Neon OWNER connection string (direct, not pooled), sslmode=require
+#   BACKUP_AGE_RECIPIENT  age public key, e.g. age1...
+name: Nightly backup
+on:
+  schedule:
+    - cron: '23 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install age
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+      - name: Dump and encrypt
+        env:
+          DB: ${{ secrets.BACKUP_DATABASE_URL }}
+          RECIPIENT: ${{ secrets.BACKUP_AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          test -n "$DB" && test -n "$RECIPIENT"
+          docker run --rm -e DB postgres:17 sh -c 'pg_dump --format=custom --no-owner "$DB"' \
+            | age -r "$RECIPIENT" > "catc-$(date -u +%Y%m%dT%H%M%SZ).dump.age"
+          ls -l *.dump.age
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: catc-db-backup
+          path: '*.dump.age'
+          retention-days: 30
+          if-no-files-found: error
+      - name: Audit log retention (1 year)
+        env:
+          DB: ${{ secrets.BACKUP_DATABASE_URL }}
+        run: docker run --rm -e DB postgres:17 sh -c "psql \"\$DB\" -v ON_ERROR_STOP=1 -c \"delete from audit_log where created_at < now() - interval '1 year'\""

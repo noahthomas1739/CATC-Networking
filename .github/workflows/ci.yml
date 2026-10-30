@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: catc_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Throwaway CI-only credentials for the ephemeral service container.
+      TEST_DATABASE_URL_MIGRATE: postgres://postgres:postgres@localhost:5432/catc_test
+      APP_DB_PASSWORD: ci-app-password
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npx next typegen
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgres://catc_app:ci-app-password@localhost:5432/catc_test
+          APP_URL: https://directory.example.org
+          HASH_SECRET: ci-only-hash-secret-not-used-anywhere-else-000
+          RESEND_API_KEY: ci-placeholder
